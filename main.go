@@ -97,8 +97,8 @@ func startServer(logger *slog.Logger, cfg *config.Config) {
 			}))
 		}(listenerAndOpts.listener)
 
-		logger.Info(fmt.Sprintf("server started at %s://%s:%d",
-			listenerAndOpts.opts.Scheme, listenerAndOpts.opts.Host, listenerAndOpts.opts.Port))
+		logger.Info(fmt.Sprintf("server started at %s://%s",
+			listenerAndOpts.opts.Scheme, listenerAndOpts.listener.Addr().String()))
 	}
 }
 
