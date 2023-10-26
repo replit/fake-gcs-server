@@ -115,6 +115,7 @@ type objectResponse struct {
 	TimeDeleted     string                 `json:"timeDeleted,omitempty"`
 	Updated         string                 `json:"updated,omitempty"`
 	Generation      int64                  `json:"generation,string"`
+	Metageneration  int64                  `json:"metageneration,string"`
 	CustomTime      string                 `json:"customTime,omitempty"`
 	Metadata        map[string]string      `json:"metadata,omitempty"`
 }
@@ -140,6 +141,7 @@ func newObjectResponse(obj ObjectAttrs) objectResponse {
 		Updated:         formatTime(obj.Updated),
 		CustomTime:      formatTime(obj.CustomTime),
 		Generation:      obj.Generation,
+		Metageneration:  1,
 	}
 }
 
