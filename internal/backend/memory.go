@@ -286,7 +286,7 @@ func (s *storageMemory) GetObjectWithGeneration(bucketName, objectName string, g
 	obj := Object{ObjectAttrs: ObjectAttrs{BucketName: bucketName, Name: objectName}}
 
 	// Make a copy so that we can append without potentially modifying the original.
-	listToConsider := make([]Object, 0, len(bucketInMemory.activeObjects))
+	listToConsider := make([]Object, len(bucketInMemory.activeObjects))
 	copy(listToConsider, bucketInMemory.activeObjects)
 	if generation != 0 {
 		matchGeneration = true
