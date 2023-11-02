@@ -244,7 +244,16 @@ func (s *Server) simpleUpload(bucketName string, r *http.Request) jsonResponse {
 		},
 		Content: notImplementedSeeker{r.Body},
 	}
-	obj, err := s.createObject(obj, backend.NoConditions{})
+
+	conditions, err := s.wrapUploadPreconditions(r, bucketName, name)
+	if err != nil {
+		return jsonResponse{
+			status:       http.StatusBadRequest,
+			errorMessage: err.Error(),
+		}
+	}
+
+	obj, err = s.createObject(obj, conditions)
 	if err != nil {
 		return errToJsonResponse(err)
 	}
