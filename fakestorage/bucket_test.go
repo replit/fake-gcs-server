@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"runtime"
 	"testing"
 	"time"
 
@@ -16,14 +15,6 @@ import (
 	"google.golang.org/api/googleapi"
 	"google.golang.org/api/iterator"
 )
-
-func tempDir() string {
-	if runtime.GOOS == "linux" {
-		return "/var/tmp"
-	} else {
-		return os.TempDir()
-	}
-}
 
 func TestServerClientUpdateBucketAttrs(t *testing.T) {
 	runServersTest(t, runServersOptions{enableFSBackend: true}, func(t *testing.T, server *Server) {
@@ -129,6 +120,18 @@ func TestServerClientBucketAttrs(t *testing.T) {
 		//       [1]: https://pkg.go.dev/cloud.google.com/go/storage#BucketAttrs
 		if attrs.StorageClass != "STANDARD" {
 			t.Errorf("wrong bucket storage class returned\nwant %q\ngot  %q", "STANDARD", attrs.StorageClass)
+		}
+		if attrs.ProjectNumber != 0 {
+			t.Errorf("wrong bucket project number returned\nwant %q\ngot  %q", "0", attrs.ProjectNumber)
+		}
+		if attrs.MetaGeneration != 1 {
+			t.Errorf("wrong bucket metageneration returned\nwant %q\ngot  %q", "1", attrs.MetaGeneration)
+		}
+		if attrs.Etag != "RVRhZw==" {
+			t.Errorf("wrong bucket etag returned\nwant %q\ngot  %q", "RVRhZw==", attrs.Etag)
+		}
+		if attrs.LocationType != "region" {
+			t.Errorf("wrong bucket location type returned\nwant %q\ngot  %q", "region", attrs.LocationType)
 		}
 	})
 }
@@ -240,6 +243,7 @@ func TestServerClientBucketCreateValidation(t *testing.T) {
 		"or spaces",
 		"don't even try",
 		"no/slashes/either",
+		"uppercaseNOTallowed",
 	}
 
 	for _, bucketName := range bucketNames {
@@ -318,7 +322,7 @@ func TestServerClientListObjects(t *testing.T) {
 		{ObjectAttrs: ObjectAttrs{BucketName: "some-bucket", Name: "img/hi-res/party-02.jpg"}},
 		{ObjectAttrs: ObjectAttrs{BucketName: "some-bucket", Name: "img/hi-res/party-03.jpg"}},
 	}
-	dir, err := os.MkdirTemp(tempDir(), "fakestorage-test-root-")
+	dir, err := os.MkdirTemp("", "fakestorage-test-root-")
 	if err != nil {
 		t.Fatal(err)
 	}

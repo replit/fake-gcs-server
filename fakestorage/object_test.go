@@ -15,7 +15,9 @@ import (
 	"hash/crc32"
 	"io"
 	"net/http"
+	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,11 +46,13 @@ type objectTestCases []struct {
 
 func getObjectTestCases() objectTestCases {
 	const (
-		bucketName      = "some-bucket"
-		content         = "some nice content"
-		contentType     = "text/plain; charset=utf-8"
-		contentEncoding = "gzip"
-		metaValue       = "MetaValue"
+		bucketName         = "some-bucket"
+		content            = "some nice content"
+		contentType        = "text/plain; charset=utf-8"
+		contentEncoding    = "gzip"
+		contentDisposition = "attachment; filename=\"replaced.txt\""
+		contentLanguage    = "fr"
+		metaValue          = "MetaValue"
 	)
 	testInitExecTime := time.Now().Truncate(time.Microsecond)
 	u32Checksum := uint32Checksum([]byte(content))
@@ -105,13 +109,16 @@ func getObjectTestCases() objectTestCases {
 			Object{
 				Content: []byte(content),
 				ObjectAttrs: ObjectAttrs{
-					BucketName:      bucketName,
-					Name:            "img/location/meta.jpg",
-					ContentType:     contentType,
-					ContentEncoding: contentEncoding,
-					Crc32c:          checksum.EncodedChecksum(uint32ToBytes(u32Checksum)),
-					Md5Hash:         checksum.EncodedHash(hash),
-					Metadata:        map[string]string{"MetaHeader": metaValue},
+					BucketName:         bucketName,
+					Name:               "img/location/meta.jpg",
+					ContentType:        contentType,
+					ContentEncoding:    contentEncoding,
+					ContentDisposition: contentDisposition,
+					ContentLanguage:    contentLanguage,
+					Crc32c:             checksum.EncodedChecksum(uint32ToBytes(u32Checksum)),
+					Md5Hash:            checksum.EncodedHash(hash),
+					Metadata:           map[string]string{"MetaHeader": metaValue},
+					StorageClass:       "COLDLINE",
 				},
 			},
 		},
@@ -122,6 +129,17 @@ func getObjectTestCases() objectTestCases {
 					BucketName:  bucketName,
 					Name:        "video/hi-res/best_video_1080p.mp4",
 					ContentType: "text/html; charset=utf-8",
+				},
+			},
+		},
+		{
+			"object with no contents neither dates",
+			Object{
+				ObjectAttrs: ObjectAttrs{
+					BucketName:   bucketName,
+					Name:         "video/hi-res/best_video_1080p.mp4",
+					ContentType:  "text/html; charset=utf-8",
+					StorageClass: "COLDLINE",
 				},
 			},
 		},
@@ -143,6 +161,9 @@ func checkObjectAttrs(testObj Object, attrs *storage.ObjectAttrs, t *testing.T) 
 	}
 	if attrs.Name != testObj.Name {
 		t.Errorf("wrong object name\nwant %q\ngot  %q", testObj.Name, attrs.Name)
+	}
+	if testObj.StorageClass != "" && attrs.StorageClass != testObj.StorageClass {
+		t.Errorf("wrong object storage class\nwant %q\ngot  %q", testObj.StorageClass, attrs.StorageClass)
 	}
 	if !(testObj.Created.IsZero()) && !testObj.Created.Equal(attrs.Created) {
 		t.Errorf("wrong created date\nwant %v\ngot   %v\nname %v", testObj.Created, attrs.Created, attrs.Name)
@@ -168,6 +189,19 @@ func checkObjectAttrs(testObj Object, attrs *storage.ObjectAttrs, t *testing.T) 
 	if attrs.ContentEncoding != testObj.ContentEncoding {
 		t.Errorf("wrong content encoding\nwant %q\ngot  %q", testObj.ContentEncoding, attrs.ContentEncoding)
 	}
+	if attrs.ContentDisposition != testObj.ContentDisposition {
+		t.Errorf("wrong content disposition\nwant %q\ngot  %q", testObj.ContentDisposition, attrs.ContentDisposition)
+	}
+	if attrs.ContentLanguage != testObj.ContentLanguage {
+		t.Errorf("wrong content language\nwant %q\ngot  %q", testObj.ContentLanguage, attrs.ContentLanguage)
+	}
+	expectedStorageClass := testObj.StorageClass
+	if expectedStorageClass == "" {
+		expectedStorageClass = "STANDARD"
+	}
+	if attrs.StorageClass != expectedStorageClass {
+		t.Errorf("wrong storage class\nwant %q\ngot  %q", expectedStorageClass, attrs.StorageClass)
+	}
 	if testObj.Content != nil && attrs.Size != int64(len(testObj.Content)) {
 		t.Errorf("wrong size returned\nwant %d\ngot  %d", len(testObj.Content), attrs.Size)
 	}
@@ -177,7 +211,7 @@ func checkObjectAttrs(testObj Object, attrs *storage.ObjectAttrs, t *testing.T) 
 	if testObj.Content != nil && !bytes.Equal(attrs.MD5, checksum.MD5Hash(testObj.Content)) {
 		t.Errorf("wrong hash returned\nwant %d\ngot   %d", checksum.MD5Hash(testObj.Content), attrs.MD5)
 	}
-	expectedEtag := fmt.Sprintf("\"%s\"", checksum.EncodedHash(attrs.MD5))
+	expectedEtag := checksum.EncodedHash(attrs.MD5)
 	if attrs.Etag != expectedEtag {
 		t.Errorf("wrong Etag returned\nwant %s\ngot   %s", expectedEtag, attrs.Etag)
 	}
@@ -185,6 +219,14 @@ func checkObjectAttrs(testObj Object, attrs *storage.ObjectAttrs, t *testing.T) 
 		if val, err := getMetadataHeaderFromAttrs(attrs, "MetaHeader"); err != nil || val != testObj.Metadata["MetaHeader"] {
 			t.Errorf("wrong MetaHeader returned\nwant %s\ngot %v", testObj.Metadata["MetaHeader"], val)
 		}
+	}
+	externalURL := "" // We don't set any `externalURL` value during tests.
+	expectedMediaLink := fmt.Sprintf("%s/download/storage/v1/b/%s/o/%s?alt=media", externalURL, url.PathEscape(testObj.BucketName), url.PathEscape(testObj.Name))
+	if attrs.MediaLink != expectedMediaLink {
+		t.Errorf("wrong MediaLink returned\nwant %s\ngot  %s", expectedMediaLink, attrs.MediaLink)
+	}
+	if attrs.Metageneration != 1 {
+		t.Errorf("wrong metageneration\nwant 1\ngot  %d", attrs.Metageneration)
 	}
 }
 
@@ -372,7 +414,7 @@ func TestServerClientObjectTranscoding(t *testing.T) {
 	const (
 		bucketName      = "some-bucket"
 		objectName      = "items/data.txt"
-		content         = "some nice content, which will be gziped"
+		content         = "some nice content, which will be gzipped"
 		contentType     = "text/plain; charset=utf-8"
 		contentEncoding = "gzip"
 	)
@@ -429,7 +471,7 @@ func TestServerClientObjectSkipTranscoding(t *testing.T) {
 	const (
 		bucketName      = "some-bucket"
 		objectName      = "items/data.txt"
-		content         = "some nice content, which will be gziped"
+		content         = "some nice content, which will be gzipped"
 		contentType     = "text/plain; charset=utf-8"
 		contentEncoding = "gzip"
 	)
@@ -591,6 +633,34 @@ func TestServerClientObjectRangeReader(t *testing.T) {
 					t.Errorf("wrong content type\nwant %q\ngot  %q", contentType, ct)
 				}
 			})
+		}
+	})
+}
+
+func TestServerClientObjectRangeReaderInvalid(t *testing.T) {
+	const (
+		bucketName  = "some-bucket"
+		objectName  = "items/data.txt"
+		content     = "some really nice but long content stored in my object"
+		contentType = "text/plain; charset=iso-8859"
+	)
+	objs := []Object{
+		{
+			ObjectAttrs: ObjectAttrs{
+				BucketName:  bucketName,
+				Name:        objectName,
+				ContentType: contentType,
+			},
+			Content: []byte(content),
+		},
+	}
+
+	runServersTest(t, runServersOptions{objs: objs}, func(t *testing.T, server *Server) {
+		client := server.Client()
+		objHandle := client.Bucket(bucketName).Object(objectName)
+		_, err := objHandle.NewRangeReader(context.TODO(), 500, 10)
+		if err == nil {
+			t.Fatal("unexpected <nil> error")
 		}
 	})
 }
@@ -1661,6 +1731,23 @@ func TestServerClientObjectSetAclPrivate(t *testing.T) {
 				t.Fatal("acl role not set to RoleReader")
 				return
 			}
+
+			err = objHandle.ACL().Delete(ctx, storage.AllAuthenticatedUsers)
+			if err != nil {
+				t.Fatalf("unexpected error while deleting acl %+v", err)
+				return
+			}
+
+			rules, err = objHandle.ACL().List(ctx)
+			if err != nil {
+				t.Fatalf("unexpected error while getting acl %+v", err)
+				return
+			}
+
+			if len(rules) != 0 {
+				t.Fatalf("acl has unexpected rules: %+v", rules)
+				return
+			}
 		})
 	})
 }
@@ -1833,6 +1920,116 @@ func TestServerClientObjectUpdateContentType(t *testing.T) {
 	})
 }
 
+func TestServerClientObjectProjection(t *testing.T) {
+	const (
+		bucketName = "some-bucket"
+		objectName = "data.txt"
+	)
+	objs := []Object{
+		{
+			ObjectAttrs: ObjectAttrs{
+				BucketName: bucketName,
+				Name:       objectName,
+				ACL: []storage.ACLRule{
+					{Entity: "user-1", Role: "OWNER"},
+					{Entity: "user-2", Role: "READER"},
+				},
+			},
+		},
+	}
+
+	runServersTest(t, runServersOptions{objs: objs}, func(t *testing.T, server *Server) {
+		assertProjection := func(url string, wantStatusCode int, wantACL []objectAccessControl) {
+			// Perform request
+			client := server.HTTPClient()
+			req, err := http.NewRequest(http.MethodGet, url, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			data, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Assert status code
+			if resp.StatusCode != wantStatusCode {
+				t.Errorf("wrong status returned\nwant %d\ngot  %d\nbody: %s", wantStatusCode, resp.StatusCode, data)
+			}
+
+			// Assert ACL
+			var respJsonBody objectResponse
+			err = json.Unmarshal(data, &respJsonBody)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var gotACL []objectAccessControl
+			if respJsonBody.ACL != nil {
+				gotACL = make([]objectAccessControl, len(respJsonBody.ACL))
+				for i, acl := range respJsonBody.ACL {
+					gotACL[i] = *acl
+				}
+			}
+			if !reflect.DeepEqual(gotACL, wantACL) {
+				t.Errorf("unexpected ACL\nwant %+v\ngot  %+v", wantACL, gotACL)
+			}
+
+			// Assert error (if "400 Bad Request")
+			if resp.StatusCode == http.StatusBadRequest {
+				var respJsonErrorBody errorResponse
+				err = json.Unmarshal(data, &respJsonErrorBody)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if respJsonErrorBody.Error.Code != http.StatusBadRequest {
+					t.Errorf("wrong error code\nwant %d\ngot  %d", http.StatusBadRequest, respJsonErrorBody.Error.Code)
+				}
+				if !strings.Contains(respJsonErrorBody.Error.Message, "invalid projection") {
+					t.Errorf("wrong error message\nwant %q\ngot  %q", ".*invalid projection.*", respJsonErrorBody.Error.Message)
+				}
+			}
+		}
+
+		url := fmt.Sprintf("https://storage.googleapis.com/storage/v1/b/%s/o/%s", bucketName, objectName)
+		fullACL := []objectAccessControl{
+			{Bucket: bucketName, Object: objectName, Entity: "user-1", Role: "OWNER", Etag: "RVRhZw==", Kind: "storage#objectAccessControl"},
+			{Bucket: bucketName, Object: objectName, Entity: "user-2", Role: "READER", Etag: "RVRhZw==", Kind: "storage#objectAccessControl"},
+		}
+
+		t.Run("full projection", func(t *testing.T) {
+			projectionParamValues := []string{"full", "Full", "FULL", "fUlL"}
+			for _, value := range projectionParamValues {
+				url := fmt.Sprintf("%s?projection=%s", url, value)
+				assertProjection(url, http.StatusOK, fullACL)
+			}
+		})
+
+		t.Run("noAcl projection", func(t *testing.T) {
+			projectionParamValues := []string{"noAcl", "NoAcl", "NOACL", "nOaCl"}
+			for _, value := range projectionParamValues {
+				url := fmt.Sprintf("%s?projection=%s", url, value)
+				assertProjection(url, http.StatusOK, nil)
+			}
+		})
+
+		t.Run("invalid projection", func(t *testing.T) {
+			projectParamValues := []string{"invalid", "", "ful"}
+			for _, value := range projectParamValues {
+				url := fmt.Sprintf("%s?projection=%s", url, value)
+				assertProjection(url, http.StatusBadRequest, nil)
+			}
+		})
+
+		t.Run("default projection", func(t *testing.T) {
+			assertProjection(url, http.StatusOK, nil)
+		})
+	})
+}
+
 func TestServerClientObjectPatchCustomTime(t *testing.T) {
 	const (
 		bucketName  = "some-bucket"
@@ -1933,56 +2130,67 @@ func TestParseRangeRequest(t *testing.T) {
 
 func TestServiceClientComposeObject(t *testing.T) {
 	const (
-		source1Content = "some content"
-		source2Content = "other content"
-		source3Content = "third test"
-		contentType    = "text/plain; charset=utf-8"
+		source1Content     = "some content"
+		source2Content     = "other content"
+		source3Content     = "third test"
+		contentDisposition = "attachment; filename=\"replaced.txt\""
+		contentLanguage    = "fr"
+		contentType        = "text/plain; charset=utf-8"
 	)
 	u32Checksum := uint32Checksum([]byte(source1Content))
 	hash := checksum.MD5Hash([]byte(source1Content))
+	then := time.Now().Add(time.Duration(-1) * time.Minute)
 
 	objs := []Object{
 		{
 			ObjectAttrs: ObjectAttrs{
-				BucketName:  "first-bucket",
-				Name:        "files/source1.txt",
-				ContentType: contentType,
-				Crc32c:      checksum.EncodedChecksum(uint32ToBytes(u32Checksum)),
-				Md5Hash:     checksum.EncodedHash(hash),
-				Metadata:    map[string]string{"foo": "bar"},
+				BucketName:         "first-bucket",
+				Name:               "files/source1.txt",
+				ContentDisposition: contentDisposition,
+				ContentLanguage:    contentLanguage,
+				ContentType:        contentType,
+				Crc32c:             checksum.EncodedChecksum(uint32ToBytes(u32Checksum)),
+				Md5Hash:            checksum.EncodedHash(hash),
+				Metadata:           map[string]string{"foo": "bar"},
 			},
 			Content: []byte(source1Content),
 		},
 		{
 			ObjectAttrs: ObjectAttrs{
-				BucketName:  "first-bucket",
-				Name:        "files/source2.txt",
-				ContentType: contentType,
-				Crc32c:      checksum.EncodedChecksum(uint32ToBytes(u32Checksum)),
-				Md5Hash:     checksum.EncodedHash(hash),
-				Metadata:    map[string]string{"foo": "bar"},
+				BucketName:         "first-bucket",
+				Name:               "files/source2.txt",
+				ContentDisposition: contentDisposition,
+				ContentLanguage:    contentLanguage,
+				ContentType:        contentType,
+				Crc32c:             checksum.EncodedChecksum(uint32ToBytes(u32Checksum)),
+				Md5Hash:            checksum.EncodedHash(hash),
+				Metadata:           map[string]string{"foo": "bar"},
 			},
 			Content: []byte(source2Content),
 		},
 		{
 			ObjectAttrs: ObjectAttrs{
-				BucketName:  "first-bucket",
-				Name:        "files/source3.txt",
-				ContentType: contentType,
-				Crc32c:      checksum.EncodedChecksum(uint32ToBytes(u32Checksum)),
-				Md5Hash:     checksum.EncodedHash(hash),
-				Metadata:    map[string]string{"foo": "bar"},
+				BucketName:         "first-bucket",
+				Name:               "files/source3.txt",
+				ContentDisposition: contentDisposition,
+				ContentLanguage:    contentLanguage,
+				ContentType:        contentType,
+				Crc32c:             checksum.EncodedChecksum(uint32ToBytes(u32Checksum)),
+				Md5Hash:            checksum.EncodedHash(hash),
+				Metadata:           map[string]string{"foo": "bar"},
 			},
 			Content: []byte(source3Content),
 		},
 		{
 			ObjectAttrs: ObjectAttrs{
-				BucketName:  "first-bucket",
-				Name:        "files/destination.txt",
-				ContentType: contentType,
-				Crc32c:      checksum.EncodedChecksum(uint32ToBytes(u32Checksum)),
-				Md5Hash:     checksum.EncodedHash(hash),
-				Metadata:    map[string]string{"foo": "bar"},
+				BucketName:         "first-bucket",
+				Name:               "files/destination.txt",
+				ContentDisposition: contentDisposition,
+				ContentLanguage:    contentLanguage,
+				ContentType:        contentType,
+				Crc32c:             checksum.EncodedChecksum(uint32ToBytes(u32Checksum)),
+				Md5Hash:            checksum.EncodedHash(hash),
+				Metadata:           map[string]string{"foo": "bar"},
 			},
 			Content: []byte("test"),
 		},
@@ -2028,7 +2236,7 @@ func TestServiceClientComposeObject(t *testing.T) {
 				"files/destination.txt",
 				[]string{"01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32", "33"},
 				"",
-				"googleapi: Error 400: The number of source components provided (33) exceeds the maximum (32)",
+				"googleapi: Error 400: The number of source components provided (33) exceeds the maximum (32), Bad Request",
 			},
 		}
 		for _, test := range tests {
@@ -2045,6 +2253,8 @@ func TestServiceClientComposeObject(t *testing.T) {
 				dstObject := client.Bucket(test.bucketName).Object(test.destObjectName)
 				composer := dstObject.ComposerFrom(sourceObjects...)
 
+				composer.ContentDisposition = contentDisposition
+				composer.ContentLanguage = contentLanguage
 				composer.ContentType = contentType
 				composer.Metadata = map[string]string{"baz": "qux"}
 				attrs, err := composer.Run(context.TODO())
@@ -2070,8 +2280,20 @@ func TestServiceClientComposeObject(t *testing.T) {
 				if attrs.CRC32C != expectedChecksum {
 					t.Errorf("wrong checksum in compose object attrs\nwant %d\ngot  %d", u32Checksum, attrs.CRC32C)
 				}
+				if attrs.ContentDisposition != contentDisposition {
+					t.Errorf("wrong content disposition\nwant %q\ngot  %q", contentDisposition, attrs.ContentDisposition)
+				}
+				if attrs.ContentLanguage != contentLanguage {
+					t.Errorf("wrong content language\nwant %q\ngot  %q", contentLanguage, attrs.ContentLanguage)
+				}
 				if attrs.ContentType != contentType {
 					t.Errorf("wrong content type\nwant %q\ngot  %q", contentType, attrs.ContentType)
+				}
+				if then.After(attrs.Created) {
+					t.Errorf("wrong created time\nwant > %v\ngot:   %v", then, attrs.Created)
+				}
+				if then.After(attrs.Updated) {
+					t.Errorf("wrong updated time\nwant > %v\ngot:   %v", then, attrs.Updated)
 				}
 				if !bytes.Equal(attrs.MD5, expectedHash) {
 					t.Errorf("wrong hash returned\nwant %d\ngot   %d", hash, attrs.MD5)
@@ -2088,6 +2310,12 @@ func TestServiceClientComposeObject(t *testing.T) {
 				}
 				if expect := checksum.EncodedHash(expectedHash); expect != obj.Md5Hash {
 					t.Errorf("wrong hash on object\nwant %s\ngot  %s", expect, obj.Md5Hash)
+				}
+				if obj.ContentDisposition != contentDisposition {
+					t.Errorf("wrong content disposition\nwant %q\ngot  %q", contentDisposition, obj.ContentDisposition)
+				}
+				if obj.ContentLanguage != contentLanguage {
+					t.Errorf("wrong content language\nwant %q\ngot  %q", contentLanguage, obj.ContentLanguage)
 				}
 				if obj.ContentType != contentType {
 					t.Errorf("wrong content type\nwant %q\ngot  %q", contentType, obj.ContentType)
