@@ -225,7 +225,7 @@ func (s *storageFS) CreateObject(obj StreamingObject, conditions Conditions) (St
 		return StreamingObject{}, PreConditionFailed
 	}
 
-	path := filepath.Join(s.rootDir, url.PathEscape(obj.BucketName), obj.Name)
+	path := s.objectPath(obj.BucketName, obj.Name)
 	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return StreamingObject{}, err
 	}
@@ -286,7 +286,11 @@ func (s *storageFS) ListObjects(bucketName string, prefix string, versions bool)
 			return err
 		}
 
-		objName, _ := filepath.Rel(bucketPath, path)
+		escapedObjName, _ := filepath.Rel(bucketPath, path)
+		objName, err := url.PathUnescape(escapedObjName)
+		if err != nil {
+			return fmt.Errorf("failed to unescape object name %s: %w", escapedObjName, err)
+		}
 		if s.mh.isSpecialFile(info.Name()) {
 			return nil
 		}
@@ -335,7 +339,7 @@ func (s *storageFS) getObject(bucketName, objectName string) (StreamingObject, e
 	}
 
 	obj := StreamingObject{ObjectAttrs: attrs}
-	path := filepath.Join(s.rootDir, url.PathEscape(bucketName), objectName)
+	path := s.objectPath(bucketName, objectName)
 	err = openObjectAndSetSize(&obj, path)
 
 	return obj, err
@@ -354,7 +358,7 @@ func openObjectAndSetSize(obj *StreamingObject, path string) error {
 }
 
 func (s *storageFS) getObjectAttrs(bucketName, objectName string) (ObjectAttrs, error) {
-	path := filepath.Join(s.rootDir, url.PathEscape(bucketName), objectName)
+	path := s.objectPath(bucketName, objectName)
 	encoded, err := s.mh.read(path)
 	if err != nil {
 		return ObjectAttrs{}, err
@@ -383,11 +387,15 @@ func (s *storageFS) DeleteObject(bucketName, objectName string) error {
 	if objectName == "" {
 		return errors.New("can't delete object with empty name")
 	}
-	path := filepath.Join(s.rootDir, url.PathEscape(bucketName), objectName)
+	path := s.objectPath(bucketName, objectName)
 	if err := s.mh.remove(path); err != nil {
 		return err
 	}
 	return os.Remove(path)
+}
+
+func (s *storageFS) objectPath(bucketName, objectName string) string {
+	return filepath.Join(s.rootDir, url.PathEscape(bucketName), url.PathEscape(objectName))
 }
 
 func (s *storageFS) PatchObject(bucketName, objectName string, attrsToUpdate ObjectAttrs) (StreamingObject, error) {
