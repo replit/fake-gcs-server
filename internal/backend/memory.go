@@ -221,13 +221,15 @@ func (s *storageMemory) DeleteBucket(name string) error {
 
 // CreateObject stores an object in the backend.
 func (s *storageMemory) CreateObject(obj StreamingObject, conditions Conditions) (StreamingObject, error) {
+	// Read the body before taking the lock, so a slow or stalled upload does not block every
+	// other request.
+	bufferedObj, err := obj.BufferedObject()
 	s.mtx.Lock()
 	defer s.mtx.Unlock()
-	bucketInMemory, err := s.getBucketInMemory(obj.BucketName)
-	if err != nil {
+	bucketInMemory, bucketErr := s.getBucketInMemory(obj.BucketName)
+	if bucketErr != nil {
 		bucketInMemory = newBucketInMemory(obj.BucketName, false, BucketAttrs{})
 	}
-	bufferedObj, err := obj.BufferedObject()
 	currentGeneration := findLastObjectGeneration(bufferedObj, bucketInMemory.activeObjects)
 	if !conditions.ConditionsMet(currentGeneration) {
 		return StreamingObject{}, PreConditionFailed
