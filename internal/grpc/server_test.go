@@ -7,24 +7,15 @@ import (
 	"io"
 	"os"
 	"reflect"
-	"runtime"
 	"testing"
 
-	pb "github.com/fsouza/fake-gcs-server/genproto/googleapis/storage/v1"
 	"github.com/fsouza/fake-gcs-server/internal/backend"
 	"github.com/fsouza/fake-gcs-server/internal/checksum"
+	pb "google.golang.org/genproto/googleapis/storage/v1"
 )
 
-func tempDir() string {
-	if runtime.GOOS == "linux" {
-		return "/var/tmp"
-	} else {
-		return os.TempDir()
-	}
-}
-
 func makeStorageBackends(t *testing.T) (map[string]backend.Storage, func()) {
-	tempDir, err := os.MkdirTemp(tempDir(), "fakegcstest-grpc")
+	tempDir, err := os.MkdirTemp("", "fakegcstest-grpc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +116,7 @@ func TestObjectInsertGetUpdateCompose(t *testing.T) {
 			Metadata:   origMetadata,
 		}
 		// Test Insert Object
-		_, err := grpcServer.InsertObject(ctx, &pb.InsertObjectRequest{
+		req := &pb.InsertObjectRequest{
 			FirstMessage: &pb.InsertObjectRequest_InsertObjectSpec{
 				InsertObjectSpec: &pb.InsertObjectSpec{
 					Resource: &pb.Object{
@@ -140,7 +131,8 @@ func TestObjectInsertGetUpdateCompose(t *testing.T) {
 					Content: content,
 				},
 			},
-		})
+		}
+		err := grpcServer.InsertObject(&fakeInsertObjectServer{req: req})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -153,17 +145,14 @@ func TestObjectInsertGetUpdateCompose(t *testing.T) {
 		contentEqual(t, obj.Content, content)
 
 		// Test Get Object
-		grpc_get_obj_resp, err := grpcServer.GetObject(ctx, &pb.GetObjectRequest{
+		grpcObj, err := grpcServer.GetObject(ctx, &pb.GetObjectRequest{
 			Bucket: bucketName,
 			Object: obj1Name,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		compareGrpcObjAttrs(t, grpc_get_obj_resp.Metadata, obj.ObjectAttrs)
-		if !bytes.Equal(grpc_get_obj_resp.ChecksummedData.Content, content) {
-			t.Errorf("Wrong object content. Expected '%q', Got '%q'", grpc_get_obj_resp.ChecksummedData.Content, content)
-		}
+		compareGrpcObjAttrs(t, grpcObj, obj.ObjectAttrs)
 
 		// Test List Objects
 		objs, err := grpcServer.ListObjects(ctx, &pb.ListObjectsRequest{
@@ -174,10 +163,10 @@ func TestObjectInsertGetUpdateCompose(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(objs.Object) != 1 {
-			t.Errorf("Wrong object length. Expected 1, got %q", len(objs.Object))
+		if len(objs.Items) != 1 {
+			t.Errorf("Wrong object length. Expected 1, got %q", len(objs.Items))
 		}
-		compareGrpcObjAttrs(t, objs.Object[0], obj.ObjectAttrs)
+		compareGrpcObjAttrs(t, objs.Items[0], obj.ObjectAttrs)
 
 		// Test Patch Object
 		newMetadata := map[string]string{
@@ -191,7 +180,6 @@ func TestObjectInsertGetUpdateCompose(t *testing.T) {
 				Metadata: newMetadata,
 			},
 		})
-
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -200,14 +188,14 @@ func TestObjectInsertGetUpdateCompose(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(obj.ObjectAttrs.Metadata, newMetadata) {
+		if !reflect.DeepEqual(obj.Metadata, newMetadata) {
 			t.Errorf("Wrong object metadata. Expected '%q', Got '%q'", obj.ObjectAttrs.Metadata, newMetadata)
 		}
 
 		// Insert another object
 		obj2Name := "object2"
 		obj2Content := []byte("object2-content")
-		_, err = grpcServer.InsertObject(ctx, &pb.InsertObjectRequest{
+		req = &pb.InsertObjectRequest{
 			FirstMessage: &pb.InsertObjectRequest_InsertObjectSpec{
 				InsertObjectSpec: &pb.InsertObjectSpec{
 					Resource: &pb.Object{
@@ -222,7 +210,8 @@ func TestObjectInsertGetUpdateCompose(t *testing.T) {
 					Content: obj2Content,
 				},
 			},
-		})
+		}
+		err = grpcServer.InsertObject(&fakeInsertObjectServer{req: req})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -248,8 +237,8 @@ func TestObjectInsertGetUpdateCompose(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		expected_content := []byte("object1-contentobject2-content")
-		contentEqual(t, obj.Content, expected_content)
+		expectedContent := []byte("object1-contentobject2-content")
+		contentEqual(t, obj.Content, expectedContent)
 	})
 }
 
@@ -269,69 +258,69 @@ func TestBucketInsertGetListUpdateDelete(t *testing.T) {
 		if err != nil {
 			t.Errorf("Error while inserting bucket: %v", err)
 		}
-		bucket, storage_err := storage.GetBucket(bucketName)
-		if storage_err != nil {
-			t.Errorf("Error while getting bucket from backend: %v", storage_err)
+		bucket, storageErr := storage.GetBucket(bucketName)
+		if storageErr != nil {
+			t.Errorf("Error while getting bucket from backend: %v", storageErr)
 		}
 		if bucket.Name != bucketName {
 			t.Errorf("Expected '%s', got '%s'", bucketName, bucket.Name)
 		}
 
 		// Test GRPC GetBucket endpoint
-		grpc_bucket, get_err := grpcServer.GetBucket(ctx, &pb.GetBucketRequest{
+		grpcBucket, getErr := grpcServer.GetBucket(ctx, &pb.GetBucketRequest{
 			Bucket: bucketName,
 		})
-		if get_err != nil {
+		if getErr != nil {
 			t.Errorf("Error while getting bucket from grpc: %v", err)
 		}
-		if grpc_bucket.Name != bucketName {
-			t.Errorf("Expected '%s', got '%s'", bucketName, grpc_bucket.Name)
+		if grpcBucket.Name != bucketName {
+			t.Errorf("Expected '%s', got '%s'", bucketName, grpcBucket.Name)
 		}
-		if !grpc_bucket.DefaultEventBasedHold {
-			t.Errorf("Expected true, got '%v'", grpc_bucket.DefaultEventBasedHold)
+		if !grpcBucket.DefaultEventBasedHold {
+			t.Errorf("Expected true, got '%v'", grpcBucket.DefaultEventBasedHold)
 		}
 
 		// Test GRPC ListBucket endpoint
-		grpc_buckets, list_err := grpcServer.ListBuckets(ctx, &pb.ListBucketsRequest{})
-		if list_err != nil {
+		grpcBuckets, listErr := grpcServer.ListBuckets(ctx, &pb.ListBucketsRequest{})
+		if listErr != nil {
 			t.Errorf("List bucket error")
 		}
-		if len(grpc_buckets.Bucket) != 1 {
+		if len(grpcBuckets.Items) != 1 {
 			t.Fatal("List buckets wrong length")
 		}
-		if grpc_buckets.Bucket[0].Name != bucketName {
+		if grpcBuckets.Items[0].Name != bucketName {
 			t.Errorf("Wrong bucket name")
 		}
 
 		// Test GRPC UpdateBucket endpoint
-		_, update_err := grpcServer.UpdateBucket(ctx, &pb.UpdateBucketRequest{
+		_, updateErr := grpcServer.UpdateBucket(ctx, &pb.UpdateBucketRequest{
 			Bucket: bucketName,
 			Metadata: &pb.Bucket{
 				DefaultEventBasedHold: false,
 			},
 		})
-		if update_err != nil {
-			t.Fatal(update_err)
+		if updateErr != nil {
+			t.Fatal(updateErr)
 		}
-		grpc_bucket, err = grpcServer.GetBucket(ctx, &pb.GetBucketRequest{
+		grpcBucket, err = grpcServer.GetBucket(ctx, &pb.GetBucketRequest{
 			Bucket: bucketName,
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if grpc_bucket.DefaultEventBasedHold {
-			t.Errorf("After update, expected false, got '%v'", grpc_bucket.DefaultEventBasedHold)
+		if grpcBucket.DefaultEventBasedHold {
+			t.Errorf("After update, expected false, got '%v'", grpcBucket.DefaultEventBasedHold)
 		}
 
 		// Test GRPC DeleteBucket endpoint
-		_, delete_err := grpcServer.DeleteBucket(ctx, &pb.DeleteBucketRequest{
+		_, deleteErr := grpcServer.DeleteBucket(ctx, &pb.DeleteBucketRequest{
 			Bucket: bucketName,
 		})
-		if delete_err != nil {
-			t.Errorf("Got unexpected error when call 'DeleteBucket' endpoint of the GRPC server: %v", delete_err)
+		if deleteErr != nil {
+			t.Errorf("Got unexpected error when call 'DeleteBucket' endpoint of the GRPC server: %v", deleteErr)
 		}
-		_, storage_err = storage.GetBucket(bucketName)
-		if storage_err == nil {
+		_, storageErr = storage.GetBucket(bucketName)
+		if storageErr == nil {
 			t.Errorf("Expected to get err when getting '%s' from backend, but got none", bucketName)
 		}
 	})
