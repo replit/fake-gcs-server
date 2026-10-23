@@ -6,12 +6,60 @@ package backend
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
+
+func TestFlatObjectNamespace(t *testing.T) {
+	tests := map[string][]string{
+		"manifest first": {"repl-id", "repl-id/offset/block-id"},
+		"block first":    {"repl-id/offset/block-id", "repl-id"},
+	}
+
+	for name, objectNames := range tests {
+		t.Run(name, func(t *testing.T) {
+			storage, err := NewStorageFS(nil, t.TempDir())
+			noError(t, err)
+
+			for _, objectName := range objectNames {
+				content := []byte(objectName)
+				created, err := storage.CreateObject(Object{
+					ObjectAttrs: ObjectAttrs{BucketName: "bucket", Name: objectName},
+					Content:     content,
+				}.StreamingObject(), NoConditions{})
+				noError(t, err)
+				created.Close()
+
+				stored, err := storage.GetObject("bucket", objectName)
+				noError(t, err)
+				got, err := io.ReadAll(stored.Content)
+				noError(t, err)
+				stored.Close()
+				if diff := cmp.Diff(content, got); diff != "" {
+					t.Fatalf("object content differs (-want +got):\n%s", diff)
+				}
+			}
+
+			objects, err := storage.ListObjects("bucket", "", false)
+			noError(t, err)
+			got := make([]string, 0, len(objects))
+			for _, object := range objects {
+				got = append(got, object.Name)
+			}
+			sort.Strings(got)
+			want := append([]string(nil), objectNames...)
+			sort.Strings(want)
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Fatalf("object names differ (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
 
 func TestGetAttributes(t *testing.T) {
 	t.Parallel()
